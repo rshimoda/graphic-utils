@@ -1,0 +1,152 @@
+name: Cross-Platform Builds
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+# Cancel previous runs if a new commit is pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Apple Platforms
+
+  build-apple:
+    name: ${{ matrix.destination.name }}
+    runs-on: macos-15
+    strategy:
+      matrix:
+        destination:
+          # macOS
+          - destination: "generic/platform=macOS"
+            name: "macOS"
+          # macOS (Mac Catalyst)
+          - destination: "generic/platform=macOS,variant=Mac Catalyst"
+            name: "macOS (Mac Catalyst)"
+          # iOS
+          - destination: "generic/platform=iOS"
+            name: "iOS"
+          # tvOS
+          - destination: "generic/platform=tvOS"
+            name: "tvOS"
+          # visionOS
+          - destination: "generic/platform=visionOS"
+            name: "visionOS"
+          # watchOS
+          - destination: "generic/platform=watchOS"
+            name: "watchOS"
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Select Xcode 16.3
+      run: |
+        xcodes select 16.3
+      
+    - name: Show Xcode and Swift versions
+      run: |
+        xcodebuild -version
+        swift --version
+        
+    - name: Build for ${{ matrix.destination.name }}
+      run: |        
+        xcodebuild build \
+          -scheme ColorUtils \
+          -destination "${{ matrix.destination.destination }}" \
+          -skipPackagePluginValidation
+
+  # Linux Builds
+
+  build-linux:
+    name: Linux (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    container: swift:6.1
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          # arm64 Linux is supported in Swift 6.1 but GitHub Actions doesn't have ARM64 Ubuntu runners for private repositories yet
+          # - runner: ubuntu-latest-arm
+          #   arch: arm64
+      
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Show Swift version and architecture
+      run: |
+        swift --version
+        uname -m
+
+    - name: Build for Linux (${{ matrix.arch }})
+      run: |
+        swift build
+
+  # Windows Builds
+
+  build-windows:
+    name: Windows (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x86_64
+          # arm64 Windows is supported in Swift 6.1 but GitHub Actions doesn't have ARM64 Windows runners for private repositories yet
+          # - runner: windows-latest-arm64  # Not available yet
+          #   arch: arm64
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup Swift 6.1.1
+      uses: compnerd/gha-setup-swift@main
+      with:
+        branch: swift-6.1.1-release
+        tag: 6.1.1-RELEASE
+        
+    - name: Setup Visual Studio environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+        
+    - name: Show environment info
+      run: |
+        swift --version
+        echo "Visual Studio environment:"
+        where cl
+        cl /? 2>&1 | head -n 5
+      
+    - name: Build for Windows (${{ matrix.arch }})
+      run: |
+        swift build
+
+  # Build Matrix Summary
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-apple, build-linux, build-windows]
+    if: always()
+    
+    steps:
+    - name: Build Results
+      run: |
+        echo "## Cross-Platform Build Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Apple | ${{ needs.build-apple.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Linux | ${{ needs.build-linux.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Windows | ${{ needs.build-windows.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        
+    - name: Check overall status
+      if: needs.build-apple.result != 'success' || needs.build-linux.result != 'success' || needs.build-windows.result != 'success'
+      run: |
+        echo "❌ Some builds failed"
+        exit 1

@@ -1,0 +1,1 @@
+print("ColorUtilsWASM is ready.")
